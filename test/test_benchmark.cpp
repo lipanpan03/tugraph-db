@@ -12,11 +12,15 @@
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  */
 
-#include <gtest/gtest.h>
 #include <gflags/gflags.h>
+#include <gtest/gtest.h>
 #include <omp.h>
+
+#include <boost/algorithm/string.hpp>
 #include <filesystem>
+#include <fstream>
 #include <utility>
+
 #include "common/logger.h"
 #include "common/value.h"
 #include "graphdb/graph_db.h"
@@ -28,6 +32,7 @@ using namespace graphdb;
 DECLARE_int32(num);
 DECLARE_int32(thread);
 DECLARE_int32(depth);
+DECLARE_string(db);
 
 static inline double GetTime() {
     using namespace std::chrono;
@@ -233,7 +238,7 @@ class BenchmarkLightningGraph {
     }
 };
 
-TEST(Benchmark, khop) {
+TEST(Benchmark, simple) {
     int n = FLAGS_num, thread = FLAGS_thread, depth = FLAGS_depth;
     fs::remove_all(testdb);
     auto graphDB = GraphDB::Open(testdb, {});
@@ -253,4 +258,32 @@ TEST(Benchmark, khop) {
             LOG_INFO("The time of {} vertexes {}-hop is {}s", n, i, bm.test_read_neighbour(n, i));
         }
     }
+}
+
+TEST(Benchmark, twitter) {
+    std::string db = FLAGS_db;
+    auto graphDB = GraphDB::Open(db, {});
+    graphDB->AddVertexPropertyIndex("user_name", true, "user", "name");
+    std::string line;
+    std::ifstream vertex_file("/home/admin/lpp/data/twitter_rv.net_unique_node");
+    auto txn = graphDB->BeginTransaction();
+    while (std::getline(vertex_file, line)) {
+        txn->CreateVertex({"user"},{{"name", Value::Integer(std::stol(line))}});
+    }
+    txn->Commit();
+
+    std::ifstream edge_file("/home/admin/lpp/data/twitter_rv.net");
+    txn = graphDB->BeginTransaction();
+    while (std::getline(edge_file, line)) {
+        std::vector<std::string> result;
+        boost::algorithm::split(result, line, boost::is_any_of("\t"));
+        auto viter = txn->NewVertexIterator("user",
+                                            std::unordered_map<std::string, Value>{{"name", Value::Integer(std::stol(result[0]))}});
+        auto vertex_from = viter->GetVertex();
+        viter = txn->NewVertexIterator("user",
+                                       std::unordered_map<std::string, Value>{{"name", Value::Integer(std::stol(result[1]))}});
+        auto vertex_to = viter->GetVertex();
+        txn->CreateEdge(vertex_from, vertex_to, "weight", {});
+    }
+    txn->Commit();
 }
